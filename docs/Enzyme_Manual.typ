@@ -1,4 +1,4 @@
-#import "@local/modern-cug-report:0.1.3": *
+#import "@preview/modern-cug-report:0.1.3": *
 #show: doc => template(doc, footer: "Enzyme AD 运行时活动分析", header: "")
 
 = Enzyme 自动微分中的运行时活动问题分析

@@ -13,7 +13,7 @@ using Parameters: @with_kw
 
 include("Soil.jl")
 include("NeuralODE.jl")
-
+include("Framework.jl")
 
 
 end # module SoilNeuralODE

@@ -5,9 +5,7 @@ using LinearAlgebra: norm
 using Optimization, OptimizationOptimisers
 using Zygote
 using SciMLSensitivity  # 用于 sensealg
-using CSV, DataFrames
 
-include("Soil.jl")
 
 #=============================================================================
 NeuralODE 版本的物理信息神经网络（Physics-Informed Neural ODE）
@@ -173,7 +171,7 @@ end
 
 ## 第五步: 加载真实观测数据
 function load_soil_data(file_path)
-  df = CSV.read(file_path, DataFrame)
+  df = fread(file_path)
 
   # 提取土壤水分观测 (5层: 5, 10, 20, 50, 100 cm)
   θ_obs = Matrix{Float32}(df[:, [:SOIL_MOISTURE_5, :SOIL_MOISTURE_10, :SOIL_MOISTURE_20,
