@@ -9,8 +9,8 @@ function train(node, ps, θ₀, θ_obs;
     iter[] += 1;
     if iter[] % step == 0
       gof = evaluate(node, θ₀, state.u, θ_obs; to_df=false)
-      nse_mean = mean([g.NSE for g in gof])
-      println("Epoch $(lpad(iter[], 3)) | NSE = $(round(nse_mean, digits=6))")
+      value = mean([g.MAE for g in gof])
+      println("Epoch $(lpad(iter[], 3)) | MAE = $(round(value, digits=6))")
     end;
     false
   )

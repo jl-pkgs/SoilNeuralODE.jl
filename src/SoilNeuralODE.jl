@@ -1,6 +1,7 @@
 module SoilNeuralODE
 
-export Soil
+export Soil, create_soil_profile
+export hydraulic_conductivity, soil_water_potential
 
 # Physics-Informed NeuralODE for soil moisture simulation
 using Lux, DifferentialEquations, ComponentArrays

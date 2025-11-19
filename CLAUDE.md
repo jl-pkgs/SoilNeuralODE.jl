@@ -42,11 +42,7 @@ time,P_CALC,SOIL_MOISTURE_5,SOIL_MOISTURE_10,SOIL_MOISTURE_20,SOIL_MOISTURE_50,S
 - evaluate函数：对每层土壤水计算GOF指标（NSE, KGE, R2, RMSE等）
 - predict函数：前向预测土壤水分
 
-3. 你的evaluate写的不对，你目前评估的是某一时刻的精度，例如`evaluate(hybrid_node, θ₀, ps, θ_obs)`
-θ₀是t=0时的5层土壤含水量，而我需要评估的是全部时刻的表现
-
-
-4. 模型结构不合理，现在的模型精度非常有限。侧向壤中流 考虑不周，导致深层土壤的缓慢波动 无法捕捉。深层土壤K下降，导致土壤中层形成perched water table，导致侧向壤中流。现在的模型是如何考虑该问题的？
+3. 模型结构不合理，现在的模型精度非常有限。侧向壤中流 考虑不周，导致深层土壤的缓慢波动 无法捕捉。深层土壤K下降，导致土壤中层形成perched water table，导致侧向壤中流。现在的模型是如何考虑该问题的？
 
 [训练后评估]
 5×11 DataFrame

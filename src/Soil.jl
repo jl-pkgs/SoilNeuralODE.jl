@@ -12,6 +12,22 @@ using Parameters: @with_kw
 end
 
 
+# 生成深度变化的土壤参数剖面
+function create_soil_profile(depths, θ_s, θ_r, Ks_surface, α, n; L_decay=50.0f0)
+  n_layers = length(depths)
+  profile = Vector{NTuple{5,Float32}}(undef, n_layers)
+
+  for i in 1:n_layers
+    # Ks随深度指数衰减（模拟压实和质地变化）
+    Ks_depth = Ks_surface * exp(-depths[i] / L_decay)
+
+    profile[i] = (θ_s, θ_r, Ks_depth, α, n)
+  end
+
+  return profile
+end
+
+
 # van Genuchten 水力传导度函数 K(θ)
 function hydraulic_conductivity(θ, θ_s, θ_r, Ks, n)
   m = 1.0f0 - 1.0f0 / n
