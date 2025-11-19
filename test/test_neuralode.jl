@@ -9,7 +9,7 @@ using Interpolations
 function load_data(f; n_train=240)
   df = fread(f)
   θ_obs = Matrix{Float32}(df[:, [:SOIL_MOISTURE_5, :SOIL_MOISTURE_10, :SOIL_MOISTURE_20,
-                                   :SOIL_MOISTURE_50, :SOIL_MOISTURE_100]])'
+    :SOIL_MOISTURE_50, :SOIL_MOISTURE_100]])'
   P = Float32.(df.P_CALC ./ 10.0)  # mm/h转为cm/h
   return θ_obs[:, 1:n_train], P[1:n_train]
 end
@@ -39,13 +39,16 @@ end
 
 # 创建降水插值函数（时间单位：小时）
 tspan = (0.0f0, Float32(length(P)))  # 时间范围：小时
-times = range(0.0f0, tspan[2], length=length(P)+1)[1:end-1]
+times = range(0.0f0, tspan[2], length=length(P) + 1)[1:end-1]
 P_flux = P  # P已经是 cm/h 单位
 P_interp = LinearInterpolation(times, P_flux, extrapolation_bc=Flat())
 
 
-# 创建混合模型（输入维度：5层θ + 1个P = 6）
-nn_model = Chain(Dense(6 => 16, tanh), Dense(16 => 16, tanh), Dense(16 => 5))
+# 创建神经网络学习入渗修正（输入：P, θ_surface, K_surface = 3维）
+nn_model = Chain(
+  Dense(3 => 16, tanh),
+  Dense(16 => 16, tanh),
+  Dense(16 => 1))  # 输出：入渗修正项
 rng = Xoshiro(123)
 ps, st = Lux.setup(rng, nn_model)
 ps = ComponentArray(ps)
@@ -65,7 +68,7 @@ gof_before = evaluate(hybrid_node, θ₀, ps, θ_obs)
 println(gof_before)
 
 # 训练
-node, ps_trained, gof = train(hybrid_node, ps, θ₀, θ_obs; nepoch=50, step=1)
+node, ps_trained, gof = train(hybrid_node, ps, θ₀, θ_obs; nepoch=20, step=1)
 
 # 训练后评估
 println("\n[训练后评估]")

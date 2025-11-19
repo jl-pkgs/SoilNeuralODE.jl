@@ -4,16 +4,33 @@ export loss_mse, train, predict, evaluate
 using Optimization, OptimizationOptimisers
 
 
+# 计算实际入渗通量（物理基础 + 神经网络修正）
+# 单位：P_flux [cm/h], θ [-], K_surface [cm/h] -> Q_infiltration [cm/h]
+function infiltration(P_flux, θ_surface, K_surface, nn_model, p, nn_state)
+  # 物理基础：入渗不超过饱和导水率
+  Q_base = min(P_flux, K_surface)
+
+  # 神经网络学习入渗修正项
+  # 输入：[P, θ_surface, K_surface]
+  nn_input = reshape([P_flux, θ_surface, K_surface], 3, 1)
+  Q_correction_out, _ = nn_model(nn_input, p, nn_state)
+  Q_correction = Q_correction_out[1]
+
+  # 实际入渗 = 物理基础 + 修正项
+  Q_infiltration = Q_base + 0.1f0 * Q_correction
+  return Q_infiltration
+end
+
+
 # Richards方程：计算达西通量和含水量变化
-# 单位：P_flux [cm/h], K [cm/h], depths [cm], dθdt [1/h]
-function richards_dθdt(θ, depths, soil_params_profile, P_flux=0.0f0)
+# 单位：Q_infiltration [cm/h], K [cm/h], depths [cm], dθdt [1/h]
+# 不使用Soil结构体（避免ReverseDiff类型冲突）
+function richards_dθdt(θ, depths, soil_params_profile, Q_infiltration=0.0f0)
   n = length(θ)
-  dθdt = zeros(eltype(θ), n)
 
   # 计算每层的水力特性 [cm/h]
-  K = zeros(eltype(θ), n)
-  ψ = zeros(eltype(θ), n)
-
+  K = similar(θ, n)
+  ψ = similar(θ, n)
   for i in 1:n
     θ_s, θ_r, Ks, α, n_vg = soil_params_profile[i]
     θ_safe = clamp(θ[i], θ_r + 0.001f0, θ_s - 0.001f0)
@@ -22,24 +39,22 @@ function richards_dθdt(θ, depths, soil_params_profile, P_flux=0.0f0)
     ψ[i] = soil_water_potential(θ_safe, θ_s, θ_r, α, n_vg)     # [cm]
   end
 
-  # 计算界面水力传导度和达西通量 [cm/h]
-  Q = zeros(eltype(θ), n + 1)
-
-  # 上边界：降水入渗 [cm/h]
-  Q[1] = P_flux
+  # 计算达西通量 [cm/h]
+  Q = similar(θ, n + 1)
+  Q[1] = Q_infiltration  # 上边界：实际入渗通量（由神经网络学习）
 
   # 内部节点：达西定律 Q = -K·(∂ψ/∂z + 1) [cm/h]
   for i in 2:n
     Δz = depths[i] - depths[i-1]  # [cm]
-    K_interface = 2.0f0 * K[i-1] * K[i] / (K[i-1] + K[i] + Float32(1e-10))  # 调和平均 [cm/h]
-    ψ_gradient = (ψ[i] - ψ[i-1]) / Δz  # [cm/cm] = [-]
+    K_interface = 2.0f0 * K[i-1] * K[i] / (K[i-1] + K[i] + Float32(1e-10))
+    ψ_gradient = (ψ[i] - ψ[i-1]) / Δz  # [-]
     Q[i] = -K_interface * (ψ_gradient + 1.0f0)  # [cm/h]
   end
 
-  # 下边界：自由排水 [cm/h]
-  Q[n+1] = -K[n]
+  Q[n+1] = -K[n]  # 下边界：自由排水
 
   # 计算含水量变化：∂θ/∂t = -∂Q/∂z [1/h]
+  dθdt = similar(θ, n)
   for i in 1:n
     Δz_cell = if i == 1
       depths[2] - depths[1]
@@ -55,11 +70,11 @@ function richards_dθdt(θ, depths, soil_params_profile, P_flux=0.0f0)
 end
 
 
-# 创建混合ODE函数（Richards + Neural correction）
+# 创建混合ODE函数（Richards + Neural correction for infiltration）
 function create_hybrid_ode(nn_model, nn_state, depths, soil_params_profile, P_interp)
   function ode!(dθ, θ, p, t)
-    # 获取当前时刻降水通量（需要支持Dual numbers for autodiff）
-    t_value = float(t)  # Convert Dual to Float if needed
+    # 获取当前时刻降水通量
+    t_value = float(t)
     P_flux = P_interp(t_value)
 
     # 安全限制θ范围
@@ -67,19 +82,18 @@ function create_hybrid_ode(nn_model, nn_state, depths, soil_params_profile, P_in
     θ_r_mean = mean([sp[2] for sp in soil_params_profile])
     θ_safe = clamp.(θ, θ_r_mean + 0.001f0, θ_s_mean - 0.001f0)
 
-    # Richards方程物理项
-    dθ_physics = richards_dθdt(θ_safe, depths, soil_params_profile, P_flux)
+    # 计算表层水力传导度
+    θ_s, θ_r, Ks, α, n_vg = soil_params_profile[1]
+    K_surface = hydraulic_conductivity(θ_safe[1], θ_s, θ_r, Ks, n_vg)
 
-    # 神经网络残差修正
-    nn_input = vcat(reshape(θ_safe, :, 1), fill(P_flux, 1, 1))  # [θ; P]
-    corrections, _ = nn_model(nn_input, p, nn_state)
-    dθ_nn = vec(corrections)
+    # 计算实际入渗通量（封装函数）
+    Q_infiltration = infiltration(P_flux, θ_safe[1], K_surface, nn_model, p, nn_state)
 
-    # 混合动力学（物理主导，NN小幅修正）
-    dθ_hybrid = dθ_physics .+ 0.001f0 .* dθ_nn
+    # Richards方程
+    dθ .= richards_dθdt(θ_safe, depths, soil_params_profile, Q_infiltration)
 
     # 限制变化率防止数值爆炸
-    dθ .= clamp.(dθ_hybrid, -0.001f0, 0.001f0)
+    dθ .= clamp.(dθ, -0.001f0, 0.001f0)
     return nothing
   end
   return ode!

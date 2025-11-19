@@ -3,12 +3,12 @@ using Parameters: @with_kw
 
 @with_kw mutable struct Soil{T<:AbstractFloat}
   n_layers::Int = 5                                 # 土壤层数
-  K::Vector{T} = zeros(T, n_layers)                 # 节点水力传导度 [cm/s]
-  K₊ₕ::Vector{T} = zeros(T, n_layers + 1)           # 界面水力传导度 [cm/s]
+  K::Vector{T} = zeros(T, n_layers)                 # 节点水力传导度 [cm/h]
+  K₊ₕ::Vector{T} = zeros(T, n_layers + 1)           # 界面水力传导度 [cm/h]
   ψ::Vector{T} = zeros(T, n_layers)                 # 土壤水势 [cm]
   θ_prev::Vector{T} = zeros(T, n_layers)            # 上一时刻含水量 [-]
   θ::Vector{T} = zeros(T, n_layers)                 # 当前含水量 [-]
-  Q::Vector{T} = zeros(T, n_layers + 1)             # 达西通量 [cm/s]
+  Q::Vector{T} = zeros(T, n_layers + 1)             # 达西通量 [cm/h]
 end
 
 
