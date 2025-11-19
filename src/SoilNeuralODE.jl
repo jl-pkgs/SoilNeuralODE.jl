@@ -1,5 +1,19 @@
 module SoilNeuralODE
 
-greet() = print("Hello World!")
+export Soil
+
+# Physics-Informed NeuralODE for soil moisture simulation
+using Lux, DifferentialEquations, ComponentArrays
+using SciMLSensitivity, Zygote
+using Statistics
+using ModelParams: GOF
+using DataFrames
+using Parameters: @with_kw
+
+
+include("Soil.jl")
+include("NeuralODE.jl")
+
+
 
 end # module SoilNeuralODE

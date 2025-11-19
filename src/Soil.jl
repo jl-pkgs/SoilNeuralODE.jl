@@ -1,5 +1,6 @@
 using Parameters: @with_kw
 
+
 @with_kw mutable struct Soil{T<:AbstractFloat}
   n_layers::Int = 5                                 # 土壤层数
   K::Vector{T} = zeros(T, n_layers)                 # 节点水力传导度 [cm/s]
@@ -9,6 +10,7 @@ using Parameters: @with_kw
   θ::Vector{T} = zeros(T, n_layers)                 # 当前含水量 [-]
   Q::Vector{T} = zeros(T, n_layers + 1)             # 达西通量 [cm/s]
 end
+
 
 # van Genuchten 水力传导度函数 K(θ)
 function hydraulic_conductivity(θ, θ_s, θ_r, Ks, n)

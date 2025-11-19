@@ -30,23 +30,48 @@ NeuralODE 版本的物理信息神经网络（Physics-Informed Neural ODE）
 =============================================================================#
 
 
-# 简化的水分扩散模型（比Richards方程更稳定）
-function simple_diffusion_dθdt(θ, θ_s, θ_r, Δz)
+# Richards 方程时间导数计算（用于 ODE）
+function richards_dθdt(θ, soil_params, Δz)
+  θ_s, θ_r, Ks, α, n = soil_params
   n_layers = length(θ)
-  dθdt = zeros(eltype(θ), n_layers)
 
-  # 简单的扩散：水分从高到低流动
-  D = 0.0001f0  # 扩散系数 (cm²/s)
+  # 限制含水量在合理范围内
+  θ_clamp = clamp.(θ, θ_r + 0.001f0, θ_s - 0.001f0)
 
-  for i in 2:n_layers-1
-    # 二阶中心差分
-    d2θ_dz2 = (θ[i+1] - 2*θ[i] + θ[i-1]) / (Δz * Δz)
-    dθdt[i] = D * d2θ_dz2
+  # 计算每层的水力性质
+  K = similar(θ)
+  ψ = similar(θ)
+  for i in 1:n_layers
+    K[i] = hydraulic_conductivity(θ_clamp[i], θ_s, θ_r, Ks, n)
+    ψ[i] = soil_water_potential(θ_clamp[i], θ_s, θ_r, α, n)
   end
 
-  # 边界层保持不变
-  dθdt[1] = 0.0f0
-  dθdt[end] = 0.0f0
+  # 计算界面水力传导度（几何平均）
+  K_interface = zeros(eltype(θ), n_layers + 1)
+  K_interface[1] = K[1]
+  for i in 2:n_layers
+    K_interface[i] = sqrt(K[i-1] * K[i])  # 几何平均更稳定
+  end
+  K_interface[end] = K[end]
+
+  # 计算界面通量
+  Q = zeros(eltype(θ), n_layers + 1)
+  for i in 2:n_layers
+    Q[i] = -K_interface[i] * ((ψ[i] - ψ[i-1]) / Δz + 1.0f0)
+  end
+
+  # 边界通量
+  Q[1] = 0.0f0      # 顶部无通量
+  Q[end] = 0.0f0    # 底部无通量
+
+  # 计算含水量变化率 dθ/dt
+  dθdt = zeros(eltype(θ), n_layers)
+  for i in 1:n_layers
+    dθdt[i] = (Q[i] - Q[i+1]) / Δz
+  end
+
+  # 限制变化率（防止数值爆炸）
+  dθdt = clamp.(dθdt, -0.001f0, 0.001f0)
 
   return dθdt
 end
@@ -68,8 +93,8 @@ function create_hybrid_ode(nn_model, nn_state, depths, soil_params, Δz)
     # 限制含水量在合理范围
     θ_safe = clamp.(θ, θ_r + 0.001f0, θ_s - 0.001f0)
 
-    # 1. 物理模型：简化的扩散模型（更稳定）
-    dθ_physics = simple_diffusion_dθdt(θ_safe, θ_s, θ_r, Δz)
+    # 1. 物理模型：简化的Richards方程（非常小的权重）
+    dθ_physics = richards_dθdt(θ_safe, soil_params, Δz)
 
     # 2. 神经网络修正：基于当前状态 θ
     θ_input = reshape(θ_safe, :, 1)  # (n_layers,) -> (n_layers, 1)
@@ -78,10 +103,10 @@ function create_hybrid_ode(nn_model, nn_state, depths, soil_params, Δz)
     corrections, _ = nn_model(θ_input, p, nn_state)  # 返回 (n_layers, 1)
     corrections = vec(corrections)  # (n_layers,)
 
-    # 3. 混合：物理扩散 + NN学习残差
-    dθ_hybrid = dθ_physics .+ 0.00001f0 .* corrections
+    # 3. 混合：主要依赖NN，物理项权重很小
+    dθ_hybrid = 0.001f0 .* dθ_physics .+ 0.0001f0 .* corrections
 
-    # 限制变化率（防止数值爆炸）
+    # 限制变化率
     dθ_hybrid = clamp.(dθ_hybrid, -0.0001f0, 0.0001f0)
 
     dθ .= dθ_hybrid # 更新 dθ（原地修改）
@@ -201,36 +226,6 @@ begin
   ps, st = Lux.setup(rng, nn_model)
   ps = ComponentArray(ps)
 
-  # 计算 RMSE 和 R²
-  function calc_metrics(pred, obs)
-    rmse = sqrt(mean((pred .- obs) .^ 2))
-    ss_res = sum((obs .- pred) .^ 2)
-    ss_tot = sum((obs .- mean(obs)) .^ 2)
-    r2 = 1 - ss_res / ss_tot
-    return rmse, r2
-  end
-
-  println("\n[基线模型：纯物理模型]")
-  # 纯物理模型（无神经网络）
-  function physics_only_ode!(dθ, θ, p, t)
-    θ_s, θ_r = soil_params[1], soil_params[2]
-    θ_safe = clamp.(θ, θ_r + 0.001f0, θ_s - 0.001f0)
-    dθ_physics = simple_diffusion_dθdt(θ_safe, θ_s, θ_r, Δz)
-    dθ .= dθ_physics
-    return nothing
-  end
-
-  prob_physics = ODEProblem(physics_only_ode!, θ₀, tspan, nothing)
-  n_save = Int((tspan[2] - tspan[1]) / 3600.0f0)
-  saveat = range(tspan[1], tspan[2], length=n_save+1)[1:end-1]
-  sol_physics = solve(prob_physics, Tsit5(); reltol=1e-4, abstol=1e-6, saveat=saveat)
-
-  θ_pred_physics = Array(sol_physics)
-  rmse_physics, r2_physics = calc_metrics(θ_pred_physics, θ_obs_train)
-
-  println("纯物理模型: RMSE=$(round(rmse_physics, digits=4)), R²=$(round(r2_physics, digits=4))")
-  println("预测范围: [$(round(minimum(θ_pred_physics), digits=3)), $(round(maximum(θ_pred_physics), digits=3))]")
-
   println("\n[测试 NeuralODE 前向传播]")
   # 显式指定使用 InterpolatingAdjoint 和 ReverseDiffVJP
   hybrid_node = HybridNeuralODE(
@@ -242,7 +237,6 @@ begin
 
   # 测试前向传播
   sol, _ = hybrid_node(θ₀, ps, st)
-  θ_pred_seq = Array(sol)
   println("前向传播: n_times=$(length(sol.t)), θ_init=$(round.(sol.u[1], digits=3)), θ_final=$(round.(sol.u[end], digits=3))")
 
   # 使用真实观测数据
@@ -251,95 +245,49 @@ begin
 
   # 计算损失和评估指标
   loss_val = loss_neuralode(ps, θ₀, θ_obs_seq, hybrid_node, soil_params)
+
+  # 提取模拟结果进行评估
+  θ_pred_seq = Array(sol)  # (n_layers, n_times)
+
+  # 计算 RMSE 和 R²
+  function calc_metrics(pred, obs)
+    rmse = sqrt(mean((pred .- obs) .^ 2))
+    ss_res = sum((obs .- pred) .^ 2)
+    ss_tot = sum((obs .- mean(obs)) .^ 2)
+    r2 = 1 - ss_res / ss_tot
+    return rmse, r2
+  end
+
   rmse_all, r2_all = calc_metrics(θ_pred_seq, θ_obs_seq)
 
-  println("混合模型: loss=$(round(loss_val, digits=6)), RMSE=$(round(rmse_all, digits=4)), R²=$(round(r2_all, digits=4))")
+  println("损失值: $(round(loss_val, digits=6))")
+  println("整体评估: RMSE=$(round(rmse_all, digits=4)), R²=$(round(r2_all, digits=4))")
 
   # 各层评估
-  println("\n各层对比:")
-  println("深度(cm) | 纯物理RMSE | 混合模型RMSE")
-  println("---------|------------|-------------")
+  println("\n各层模拟效果:")
   for i in 1:n_layers
-    rmse_phy, _ = calc_metrics(θ_pred_physics[i, :], θ_obs_seq[i, :])
-    rmse_hyb, _ = calc_metrics(θ_pred_seq[i, :], θ_obs_seq[i, :])
-    println("$(lpad(Int(depths[i]), 3)) | $(lpad(round(rmse_phy, digits=4), 10)) | $(lpad(round(rmse_hyb, digits=4), 12))")
+    rmse_i, r2_i = calc_metrics(θ_pred_seq[i, :], θ_obs_seq[i, :])
+    println("  $(Int(depths[i]))cm: RMSE=$(round(rmse_i, digits=4)), R²=$(round(r2_i, digits=4))")
   end
 
   ## 测试梯度计算（使用 Zygote）
-  println("\n[梯度计算测试]")
+  println("\n[测试 NeuralODE 梯度计算]")
 
   # 定义损失函数的包装器（固定部分参数）
   loss_wrapper(p) = loss_neuralode(p, θ₀, θ_obs_seq, hybrid_node, soil_params)
 
-  # 梯度计算
+  # 注意：由于我们显式指定了 sensealg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true))
+  # 梯度将通过 adjoint 方法计算，这比朴素的反向传播更高效
   @time grads = Zygote.gradient(loss_wrapper, ps)
   grad_norm = norm(grads[1])
   has_nan = any(isnan, grads[1])
   has_inf = any(isinf, grads[1])
+  grad_sample = round.(grads[1][1:min(5, length(grads[1]))], digits=8)
 
-  println("梯度范数: $(round(grad_norm, digits=6)), NaN=$has_nan, Inf=$has_inf")
-
+  println("梯度: norm=$(round(grad_norm, digits=6)), sample=$grad_sample, NaN=$has_nan, Inf=$has_inf")
   if grad_norm > 0.0 && !has_nan && !has_inf
-    println("✓ 梯度正常，开始训练")
-
-    ## 参数优化
-    println("\n[参数优化]")
-
-    # 创建回调函数
-    iter = Ref(0)
-    loss_history = Float32[]
-
-    function callback(p, l)
-      iter[] += 1
-      push!(loss_history, l)
-
-      if iter[] % 10 == 0 || iter[] == 1
-        println("  Iter $(lpad(iter[], 3)): loss=$(round(l, digits=6))")
-      end
-
-      return false
-    end
-
-    # 设置优化问题
-    optf = Optimization.OptimizationFunction((p, _) -> loss_wrapper(p), Optimization.AutoZygote())
-    optprob = Optimization.OptimizationProblem(optf, ps)
-
-    # 开始训练
-    println("优化器: Adam(0.001), 最大迭代: 50")
-    result = Optimization.solve(
-      optprob,
-      Adam(0.001f0),
-      callback=callback,
-      maxiters=50
-    )
-
-    println("\n[训练完成]")
-    println("初始损失: $(round(loss_val, digits=6))")
-    println("最终损失: $(round(result.objective, digits=6))")
-    println("损失下降: $(round((1 - result.objective/loss_val)*100, digits=2))%")
-
-    # 使用训练后的参数评估
-    ps_trained = result.u
-    sol_trained, _ = hybrid_node(θ₀, ps_trained, st)
-    θ_pred_trained = Array(sol_trained)
-
-    rmse_trained, r2_trained = calc_metrics(θ_pred_trained, θ_obs_seq)
-
-    println("\n[最终评估]")
-    println("训练前: RMSE=$(round(rmse_all, digits=4)), R²=$(round(r2_all, digits=4))")
-    println("训练后: RMSE=$(round(rmse_trained, digits=4)), R²=$(round(r2_trained, digits=4))")
-
-    println("\n各层训练效果:")
-    println("深度(cm) | 训练前RMSE | 训练后RMSE | 改善率")
-    println("---------|-----------|-----------|--------")
-    for i in 1:n_layers
-      rmse_before, _ = calc_metrics(θ_pred_seq[i, :], θ_obs_seq[i, :])
-      rmse_after, _ = calc_metrics(θ_pred_trained[i, :], θ_obs_seq[i, :])
-      improve = (1 - rmse_after/rmse_before) * 100
-      println("$(lpad(Int(depths[i]), 3)) | $(lpad(round(rmse_before, digits=4), 9)) | $(lpad(round(rmse_after, digits=4), 9)) | $(lpad(round(improve, digits=2), 6))%")
-    end
-
+    println("✓ 梯度计算成功")
   else
-    println("⚠ 梯度异常，无法训练")
+    println("⚠ 梯度异常")
   end
 end
