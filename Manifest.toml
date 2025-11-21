@@ -2,7 +2,7 @@
 
 julia_version = "1.11.7"
 manifest_format = "2.0"
-project_hash = "8f5e2c201dc04f92a5c318696f2df371546e0a2f"
+project_hash = "2c4b833139ec433dcc26d7125f5003ad42961800"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8be2ae325471fc20b11c27bb34b518541d07dd3a"
@@ -170,9 +170,9 @@ version = "1.1.0"
 
 [[deps.BandedMatrices]]
 deps = ["ArrayLayouts", "FillArrays", "LinearAlgebra", "PrecompileTools"]
-git-tree-sha1 = "4826c9fe6023a87029e54870ad1a9800c7ea6623"
+git-tree-sha1 = "3ecdc34639e1b8b8217820af18e5850e8e78f1a7"
 uuid = "aae01518-5342-5314-be14-df237901396f"
-version = "1.10.1"
+version = "1.10.2"
 
     [deps.BandedMatrices.extensions]
     BandedMatricesSparseArraysExt = "SparseArrays"
@@ -1997,9 +1997,9 @@ version = "1.5.0"
 
 [[deps.PrettyTables]]
 deps = ["Crayons", "LaTeXStrings", "Markdown", "PrecompileTools", "Printf", "REPL", "Reexport", "StringManipulation", "Tables"]
-git-tree-sha1 = "2542fd0b9476562d80b65d00968c9c5286d5917b"
+git-tree-sha1 = "c5a07210bd060d6a8491b0ccdee2fa0235fc00bf"
 uuid = "08abe8d2-0d0c-5749-adfa-8a2ac140af0d"
-version = "3.1.1"
+version = "3.1.2"
 
 [[deps.Printf]]
 deps = ["Unicode"]
@@ -2226,9 +2226,9 @@ version = "1.5.0"
 
 [[deps.SciMLOperators]]
 deps = ["Accessors", "ArrayInterface", "DocStringExtensions", "LinearAlgebra", "MacroTools"]
-git-tree-sha1 = "b6ee4912611684e08b09e4aec55bc7d8590556bb"
+git-tree-sha1 = "a1e12aee1eb7e6f957e8483eeebf9a98f3e135d6"
 uuid = "c0aeaf25-5076-4817-a8d5-81caf7dfa961"
-version = "1.12.0"
+version = "1.13.0"
 weakdeps = ["SparseArrays", "StaticArraysCore"]
 
     [deps.SciMLOperators.extensions]
