@@ -1,3 +1,4 @@
 *.pdf
 backup
 Manifest.toml*
+*checkpoint*

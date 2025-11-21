@@ -15,7 +15,9 @@ function train(node, ps, θ₀, θ_obs;
     false
   )
 
-  optf = Optimization.OptimizationFunction((p, _) -> loss_wrapper(p), Optimization.AutoZygote())
+  # adtype = Optimization.AutoZygote()
+  adtype = Optimization.AutoEnzyme()
+  optf = Optimization.OptimizationFunction((p, _) -> loss_wrapper(p), adtype)
   optprob = Optimization.OptimizationProblem(optf, ps)
 
   @info "Start training:"

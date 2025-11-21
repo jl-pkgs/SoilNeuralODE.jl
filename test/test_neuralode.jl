@@ -2,11 +2,12 @@ using SoilNeuralODE
 using Lux, Random, ComponentArrays
 using RTableTools, DataFrames
 using DifferentialEquations, SciMLSensitivity
+using SciMLSensitivity: EnzymeVJP
 using Interpolations
 
 
 # 加载数据
-function load_data(f; n_train=240)
+function load_data(f; n_train=24*60)
   df = fread(f)
   θ_obs = Matrix{Float32}(df[:, [:SOIL_MOISTURE_5, :SOIL_MOISTURE_10, :SOIL_MOISTURE_20,
     :SOIL_MOISTURE_50, :SOIL_MOISTURE_100]])'
@@ -16,8 +17,8 @@ end
 
 
 # 参数设置
-data_file = joinpath(@__DIR__, "..", "data", "SM_AR_Batesville_8_WNW_2024.csv")
-θ_obs, P = load_data(data_file)
+f = joinpath(@__DIR__, "..", "data", "SM_AR_Batesville_8_WNW_2024.csv")
+θ_obs, P = load_data(f)
 θ₀ = θ_obs[:, 1]
 
 # 土壤参数（单位：cm/h）
@@ -54,22 +55,25 @@ ps, st = Lux.setup(rng, nn_model)
 ps = ComponentArray(ps)
 
 
-# 使用Rosenbrock23，它对autodiff要求更宽松
+# 使用Rosenbrock23 + ReverseDiff（Enzyme当前不兼容broadcast操作）
+# sensealg = InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true))
+sensealg = InterpolatingAdjoint(autojacvec=EnzymeVJP())
+
 hybrid_node = HybridNeuralODE(
   nn_model, st, tspan, depths, soil_params_profile, P_interp;
   alg=Rosenbrock23(autodiff=false), reltol=1e-3, abstol=1e-5,
-  sensealg=InterpolatingAdjoint(autojacvec=ReverseDiffVJP(true)),
+  sensealg=sensealg,
   verbose=false
 )
 
 # 训练前评估
 println("\n[训练前评估]")
 gof_before = evaluate(hybrid_node, θ₀, ps, θ_obs)
-println(gof_before)
+println(gof_before[:, 2:8])
 
 # 训练
-node, ps_trained, gof = train(hybrid_node, ps, θ₀, θ_obs; nepoch=20, step=1)
+node, ps_trained, gof = train(hybrid_node, ps, θ₀, θ_obs; nepoch=5, step=1)
 
 # 训练后评估
 println("\n[训练后评估]")
-println(gof)
+println(gof[:, 2:8])

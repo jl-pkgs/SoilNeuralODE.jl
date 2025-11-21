@@ -22,39 +22,50 @@ function infiltration(P_flux, θ_surface, K_surface, nn_model, p, nn_state)
 end
 
 
-# Richards方程：计算达西通量和含水量变化
-# 单位：Q_infiltration [cm/h], K [cm/h], depths [cm], dθdt [1/h]
-# 不使用Soil结构体（避免ReverseDiff类型冲突）
-function richards_dθdt(θ, depths, soil_params_profile, Q_infiltration=0.0f0)
+# 辅助函数：平滑限制器 (替代 output clamp)
+# 保持导数平滑，防止梯度消失
+@inline function soft_limit(x::T, limit::T) where T
+  return limit * tanh(x / limit)
+end
+
+# Richards方程：改为 In-Place 写法
+# du (dθdt) 由外部传入并在内部修改
+function richards_dθdt!(dθ, θ, depths, soil_params_profile, Q_infiltration)
   n = length(θ)
 
-  # 计算每层的水力特性 [cm/h]
-  K = similar(θ, n)
-  ψ = similar(θ, n)
+  # 在 Enzyme 中，建议尽量减少内部临时数组分配
+  # 这里为了简化演示保留了 K, ψ, Q 的分配，
+  # 极致优化可以把这些也作为缓存传入 (Pre-allocation)
+  K = similar(θ)
+  ψ = similar(θ)
+  Q = similar(θ, n + 1)
+
+  # 1. 计算水力参数
   for i in 1:n
     θ_s, θ_r, Ks, α, n_vg = soil_params_profile[i]
-    θ_safe = clamp(θ[i], θ_r + 0.001f0, θ_s - 0.001f0)
 
-    K[i] = hydraulic_conductivity(θ_safe, θ_s, θ_r, Ks, n_vg)  # [cm/h]
-    ψ[i] = soil_water_potential(θ_safe, θ_s, θ_r, α, n_vg)     # [cm]
+    # Input Clamp: 状态量的物理约束可以用硬 clamp
+    # 确保类型一致 (Float32)，避免 Enzyme 类型推断困难
+    θ_safe = clamp(θ[i], θ_r + 1f-3, θ_s - 1f-3)
+
+    K[i] = hydraulic_conductivity(θ_safe, θ_s, θ_r, Ks, n_vg)
+    ψ[i] = soil_water_potential(θ_safe, θ_s, θ_r, α, n_vg)
   end
 
-  # 计算达西通量 [cm/h]
-  Q = similar(θ, n + 1)
-  Q[1] = Q_infiltration  # 上边界：实际入渗通量（由神经网络学习）
+  # 2. 计算通量 Q
+  Q[1] = Q_infiltration
 
-  # 内部节点：达西定律 Q = -K·(∂ψ/∂z + 1) [cm/h]
   for i in 2:n
-    Δz = depths[i] - depths[i-1]  # [cm]
-    K_interface = 2.0f0 * K[i-1] * K[i] / (K[i-1] + K[i] + Float32(1e-10))
-    ψ_gradient = (ψ[i] - ψ[i-1]) / Δz  # [-]
-    Q[i] = -K_interface * (ψ_gradient + 1.0f0)  # [cm/h]
+    Δz = depths[i] - depths[i-1]
+    # 加上 1f-10 防止除以0，增加数值稳定性
+    denom = K[i-1] + K[i] + 1f-10
+    K_interface = 2.0f0 * K[i-1] * K[i] / denom
+    ψ_gradient = (ψ[i] - ψ[i-1]) / Δz
+    Q[i] = -K_interface * (ψ_gradient + 1.0f0)
   end
+  Q[n+1] = -K[n] # 自由排水
 
-  Q[n+1] = -K[n]  # 下边界：自由排水
-
-  # 计算含水量变化：∂θ/∂t = -∂Q/∂z [1/h]
-  dθdt = similar(θ, n)
+  # 3. 计算 dθ (In-Place 修改)
   for i in 1:n
     Δz_cell = if i == 1
       depths[2] - depths[1]
@@ -62,43 +73,44 @@ function richards_dθdt(θ, depths, soil_params_profile, Q_infiltration=0.0f0)
       depths[n] - depths[n-1]
     else
       (depths[i+1] - depths[i-1]) / 2.0f0
-    end  # [cm]
-    dθdt[i] = -(Q[i+1] - Q[i]) / Δz_cell  # [cm/h] / [cm] = [1/h]
-  end
+    end
 
-  return dθdt
+    val = -(Q[i+1] - Q[i]) / Δz_cell
+
+    # --- 关键修改 ---
+    # 使用 Soft Limit 替代 hard clamp
+    # 这样即使 val 很大，梯度也能传回去告诉网络减小输入
+    dθ[i] = soft_limit(val, 0.001f0)
+  end
+  return nothing
 end
 
-
-# 创建混合ODE函数（Richards + Neural correction for infiltration）
+# 混合 ODE 创建函数
 function create_hybrid_ode(nn_model, nn_state, depths, soil_params_profile, P_interp)
+  # 标准 SciML In-Place 签名: f(du, u, p, t)
   function ode!(dθ, θ, p, t)
-    # 获取当前时刻降水通量
     t_value = float(t)
     P_flux = P_interp(t_value)
 
-    # 安全限制θ范围
-    θ_s_mean = mean([sp[1] for sp in soil_params_profile])
-    θ_r_mean = mean([sp[2] for sp in soil_params_profile])
-    θ_safe = clamp.(θ, θ_r_mean + 0.001f0, θ_s_mean - 0.001f0)
+    # 计算 θ_safe (用于输入神经网络和 K_surface)
+    # 这里只取第一层，使用 Base.clamp 即可，Enzyme 支持
+    # 注意：不要 broadcat 到整个数组，只算需要的，减少计算量
+    sp1 = soil_params_profile[1]
+    θ_s, θ_r, Ks, α, n_vg = sp1
+    θ_safe_surf = clamp(θ[1], θ_r + 1f-3, θ_s - 1f-3)
 
-    # 计算表层水力传导度
-    θ_s, θ_r, Ks, α, n_vg = soil_params_profile[1]
-    K_surface = hydraulic_conductivity(θ_safe[1], θ_s, θ_r, Ks, n_vg)
+    K_surface = hydraulic_conductivity(θ_safe_surf, θ_s, θ_r, Ks, n_vg)
 
-    # 计算实际入渗通量（封装函数）
-    Q_infiltration = infiltration(P_flux, θ_safe[1], K_surface, nn_model, p, nn_state)
+    # 神经网络推理
+    Q_infiltration = infiltration(P_flux, θ_safe_surf, K_surface, nn_model, p, nn_state)
 
-    # Richards方程
-    dθ .= richards_dθdt(θ_safe, depths, soil_params_profile, Q_infiltration)
+    # 调用 In-Place 的 Richards 方程
+    richards_dθdt!(dθ, θ, depths, soil_params_profile, Q_infiltration)
 
-    # 限制变化率防止数值爆炸
-    dθ .= clamp.(dθ, -0.001f0, 0.001f0)
     return nothing
   end
   return ode!
 end
-
 
 # NeuralODE 包装器
 struct HybridNeuralODE{M,T,P,S,F}
@@ -106,7 +118,8 @@ struct HybridNeuralODE{M,T,P,S,F}
   nn_state::S
   tspan::T
   depths::Vector{Float32}
-  soil_params_profile::P  # Vector of tuples: [(θ_s, θ_r, Ks, α, n) for each layer]
+  # Vector of tuples: [(θ_s, θ_r, Ks, α, n) for each layer]
+  soil_params_profile::P  
   P_interp::F  # 降水插值函数
   alg
   kwargs
