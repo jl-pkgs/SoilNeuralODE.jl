@@ -2,7 +2,7 @@
 
 julia_version = "1.11.7"
 manifest_format = "2.0"
-project_hash = "d8a4660ee6de8d780e922993c2894ef255dab284"
+project_hash = "e3fe087144922674d26540bed09d86bbe5ffe6d9"
 
 [[deps.ADTypes]]
 git-tree-sha1 = "8be2ae325471fc20b11c27bb34b518541d07dd3a"
@@ -779,9 +779,11 @@ version = "1.2.0"
     Tracker = "9f7883ad-71c0-57eb-9f7f-b5c9e6d3789c"
 
 [[deps.FieldMetadata]]
-git-tree-sha1 = "c279c6eab9767a3f62685e5276c850512e0a1afd"
+git-tree-sha1 = "7ae42f7436abf4fb4436b4329945b423d74bf19b"
+repo-rev = "master"
+repo-url = "https://github.com/kongdd/FieldMetadata.jl"
 uuid = "bf96fef3-21d2-5d20-8afa-0e7d4c32a885"
-version = "0.3.1"
+version = "0.3.2"
 
 [[deps.FilePathsBase]]
 deps = ["Compat", "Dates"]
