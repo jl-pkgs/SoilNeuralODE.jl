@@ -12,6 +12,7 @@ using DataFrames
 using Parameters: @with_kw
 
 
+include("Parameter/Parameters.jl")
 include("Soil.jl")
 include("NeuralODE.jl")
 include("Framework.jl")
