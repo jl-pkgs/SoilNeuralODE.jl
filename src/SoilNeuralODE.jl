@@ -15,6 +15,7 @@ using Parameters: @with_kw
 include("Soil.jl")
 include("NeuralODE.jl")
 include("Framework.jl")
+include("soil_depth_init.jl")
 
 
 end # module SoilNeuralODE

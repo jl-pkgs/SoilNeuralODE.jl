@@ -2,3 +2,6 @@
 backup
 Manifest.toml*
 *checkpoint*
+
+*.pdf
+*.png
