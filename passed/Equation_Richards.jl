@@ -25,13 +25,6 @@ function cal_Q!(soil::Soil{T}, ps::StructVector{P}, θ::AbstractVector{T};
 
   method == "θ0" && (Q0 = boundary_top(soil, ps, θ0; CFL)[1])
 
-  # # 防止剧烈震荡
-  # @inbounds for i in ibeg:N-1
-  #   Q_CFL[i] = CFL * θ[i] * Δz₊ₕ[i] / dt # [cm h-1]
-  # end
-  # @show maximum(Q_CFL)
-  # Qmax = median(@view Q_CFL[ibeg:N])
-
   @inbounds for i in ibeg:N-1
     _Q = -K₊ₕ[i] * ((ψ[i] - ψ[i+1]) / Δz₊ₕ[i] + 1.0) # [cm h-1]
     Q[i] = _Q #clamp(_Q, -Qmax, Qmax)
